@@ -53,7 +53,7 @@ def check_azure_auth():
         res = requests.get(test_url, headers=headers_for_get, allow_redirects=False)
         
         if res.status_code == 200:
-            print("🔒 Azure DevOps Authentication: OK ✅")
+            print("🔐 Azure DevOps Authentication: OK ✅")
             projects = res.json()
             print(f"📋 Found {projects.get('count', 0)} projects")
             return True
@@ -204,5 +204,13 @@ async def health():
         "azure_project": AZURE_PROJECT
     }
 
+@app.get("/")
+async def root():
+    return {
+        "status": "running",
+        "service": "MCP Server for Azure DevOps"
+    }
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=5001)
+    port = int(os.getenv("PORT", 5001))
+    uvicorn.run(app, host="0.0.0.0", port=port)
