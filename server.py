@@ -3,14 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import os
+import json
 from dotenv import load_dotenv
-from openai import OpenAI
 
 load_dotenv()
 
 app = FastAPI()
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,7 +18,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def call_openai(messages, temperature=0.7):
+    """Direct HTTP call to OpenAI API"""
+    headers = {
+        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": "gpt-4",
+        "messages": messages,
+        "temperature": temperature
+    }
+    
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=payload
+    )
+    
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    else:
+        raise Exception(f"OpenAI API error: {response.status_code}")
 
 class FindWikiRequest(BaseModel):
     epic_title: str
@@ -30,13 +51,8 @@ class GenerateRequest(BaseModel):
 
 @app.post("/find_wiki_pages")
 async def find_wiki_pages(request: FindWikiRequest):
-    """
-    Uses AI to find wiki pages related to the epic title
-    Returns pages with confidence scores
-    """
     print(f"🔍 Finding wiki pages for: {request.epic_title}")
     
-    # Get all wiki pages from Azure
     try:
         all_pages = await get_all_wiki_pages()
     except Exception as e:
@@ -45,7 +61,6 @@ async def find_wiki_pages(request: FindWikiRequest):
     if not all_pages:
         return {"pages": []}
     
-    # Use AI to match pages to epic
     prompt = f"""You are analyzing which wiki pages are relevant to an Epic.
 
 Epic Title: "{request.epic_title}"
@@ -53,32 +68,26 @@ Epic Title: "{request.epic_title}"
 Available Wiki Pages:
 {chr(10).join(f"- {page}" for page in all_pages)}
 
-Task: Identify which wiki pages are related to this epic and rate each match from 0.0 to 1.0 (0 = not related, 1.0 = highly related).
+Task: Identify which wiki pages are related to this epic and rate each match from 0.0 to 1.0.
 
 Only include pages with confidence >= 0.6.
 
 Response format (JSON):
 {{
   "matches": [
-    {{"path": "page-name", "confidence": 0.95, "reason": "why it matches"}},
-    {{"path": "another-page", "confidence": 0.85, "reason": "why it matches"}}
+    {{"path": "page-name", "confidence": 0.95, "reason": "why it matches"}}
   ]
 }}
 
 Response:"""
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are an expert at matching documentation to project epics."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-        )
+        response_text = call_openai([
+            {"role": "system", "content": "You are an expert at matching documentation to project epics."},
+            {"role": "user", "content": prompt}
+        ], temperature=0.3)
         
-        import json
-        result = json.loads(response.choices[0].message.content)
+        result = json.loads(response_text)
         pages = result.get("matches", [])
         
         print(f"✅ Found {len(pages)} related wiki pages")
@@ -86,7 +95,6 @@ Response:"""
         
     except Exception as e:
         print(f"❌ AI matching failed: {str(e)}")
-        # Fallback: simple keyword matching
         matched = []
         epic_keywords = request.epic_title.lower().split()
         for page in all_pages:
@@ -99,9 +107,6 @@ Response:"""
 
 
 async def get_all_wiki_pages():
-    """
-    Fetches list of all wiki pages from Azure DevOps
-    """
     azure_org = os.getenv("AZURE_ORG_URL")
     azure_project = os.getenv("AZURE_PROJECT")
     azure_token = os.getenv("AZURE_TOKEN")
@@ -115,7 +120,6 @@ async def get_all_wiki_pages():
         "Content-Type": "application/json"
     }
     
-    # Get wiki ID
     wiki_url = f"{azure_org}/{azure_project}/_apis/wiki/wikis?api-version=7.0"
     res = requests.get(wiki_url, headers=headers)
     
@@ -128,14 +132,12 @@ async def get_all_wiki_pages():
     
     wiki_id = wikis[0]["id"]
     
-    # Get all pages
     pages_url = f"{azure_org}/{azure_project}/_apis/wiki/wikis/{wiki_id}/pages?recursionLevel=full&api-version=7.0"
     res = requests.get(pages_url, headers=headers)
     
     if res.status_code != 200:
         raise Exception(f"Failed to get pages: {res.status_code}")
     
-    # Extract page paths
     def extract_paths(page_data):
         paths = []
         if "path" in page_data:
@@ -154,14 +156,12 @@ async def get_all_wiki_pages():
 
 @app.post("/generate_stories")
 async def generate_stories(request: GenerateRequest):
-    """
-    Generates stories from wiki pages and links them to epic
-    """
     print(f"📖 Generating stories from {len(request.wiki_page_paths)} wiki pages")
     
-    # Fetch wiki content
+    port = os.getenv("PORT", "5001")
+    
     wiki_response = requests.post(
-        "http://127.0.0.1:5001/tools/fetch_wiki/run",
+        f"http://127.0.0.1:{port}/tools/fetch_wiki/run",
         json={"args": {"page_paths": request.wiki_page_paths}}
     )
     
@@ -174,70 +174,47 @@ async def generate_stories(request: GenerateRequest):
         raise HTTPException(status_code=404, detail=f"Wiki pages not found: {wiki_content}")
     
     print(f"✅ Fetched wiki content ({len(wiki_content)} chars)")
-    
-    # Generate stories with LLM
     print("🤖 Generating user stories with LLM...")
     
-    prompt = f"""You are a product manager creating user stories for Azure DevOps.
+    prompt = f"""Create 3-5 user stories per wiki page.
 
-Based on the following feature descriptions from Azure Wiki, create 3-5 user stories per wiki page.
-
-IMPORTANT FORMATTING RULES:
-1. Each user story must have:
-   - A clear, concise title (format: "User Story: [Brief Description]")
-   - A description with TWO parts:
-     a) User story statement: "As a [user type], I want [feature], so that [benefit]"
-     b) Acceptance criteria as a bulleted list
-
-2. Format each story EXACTLY like this:
+Format each story EXACTLY like this:
 ---STORY---
-TITLE: User Story: [Brief title without markdown symbols]
+TITLE: User Story: [Brief title]
 DESCRIPTION:
 As a [user], I want [feature], so that [benefit].
 
 Acceptance Criteria:
 - [Criterion 1]
 - [Criterion 2]
-- [Criterion 3]
 ---END---
-
-DO NOT use markdown symbols like ###, **, or #.
-DO NOT create separate items for acceptance criteria.
-Each story should be ONE complete unit with title and description together.
 
 Wiki Content:
 {wiki_content}
 
-Generate the user stories now:"""
+Generate stories now:"""
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a product manager who writes clear, actionable user stories for agile development."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-        )
+        llm_output = call_openai([
+            {"role": "system", "content": "You are a product manager who writes clear user stories."},
+            {"role": "user", "content": prompt}
+        ], temperature=0.7)
         
-        llm_output = response.choices[0].message.content
-        print(f"✅ LLM generated response ({len(llm_output)} chars)")
+        print(f"✅ LLM generated response")
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM generation failed: {str(e)}")
     
-    # Parse stories
     stories = parse_stories(llm_output)
     print(f"📋 Parsed {len(stories)} user stories")
     
-    # Create stories in Azure
     created_stories = []
     
     for idx, story in enumerate(stories, 1):
-        print(f"📤 Creating story {idx}/{len(stories)}: {story['title'][:50]}...")
+        print(f"📤 Creating story {idx}/{len(stories)}")
         
         azure_response = requests.post(
-            "http://127.0.0.1:5001/tools/create_story/run",
+            f"http://127.0.0.1:{port}/tools/create_story/run",
             json={
                 "args": {
                     "title": story["title"],
@@ -254,23 +231,21 @@ Generate the user stories now:"""
                 "status": "created",
                 "result": result
             })
-            print(f"✅ Story {idx} created successfully")
+            print(f"✅ Story {idx} created")
         else:
             created_stories.append({
                 "title": story["title"],
                 "status": "failed",
                 "error": azure_response.text
             })
-            print(f"❌ Story {idx} failed")
     
     return {
-        "message": f"Generated {len(stories)} user stories from {len(request.wiki_page_paths)} wiki pages",
+        "message": f"Generated {len(stories)} stories",
         "stories": created_stories
     }
 
 
 def parse_stories(llm_output: str) -> list:
-    """Parse LLM output into structured stories"""
     stories = []
     story_blocks = llm_output.split("---STORY---")
     
@@ -297,21 +272,13 @@ def parse_stories(llm_output: str) -> list:
             description = "\n".join(description_lines)
             stories.append({"title": title, "description": description})
     
-    # Fallback parsing
-    if not stories:
-        print("⚠️ Structured parsing failed, trying fallback...")
-        parts = llm_output.split("User Story")
-        for part in parts[1:]:
-            lines = part.strip().split("\n")
-            if len(lines) >= 3:
-                title = "User Story" + lines[0].split(":")[0] + ": " + ":".join(lines[0].split(":")[1:]).strip()
-                description = "\n".join(lines[1:]).strip()
-                if description:
-                    stories.append({"title": title, "description": description})
-    
     return stories
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "Story Generator (Azure Wiki + Extension)"}
+    return {"status": "ok"}
+
+@app.get("/")
+async def root():
+    return {"status": "running"}
