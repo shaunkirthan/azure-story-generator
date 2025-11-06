@@ -158,19 +158,35 @@ async def get_all_wiki_pages():
 async def generate_stories(request: GenerateRequest):
     print(f"📖 Generating stories from {len(request.wiki_page_paths)} wiki pages")
     
-    port = os.getenv("PORT", "5001")
+    # MCP server runs on port 5001 (hardcoded in mcp_server.py)
+    # Since both servers run on same machine, we use localhost
+    mcp_port = int(os.getenv("MCP_PORT", "5001"))
     
-    wiki_response = requests.post(
-        f"http://127.0.0.1:{port}/tools/fetch_wiki/run",
-        json={"args": {"page_paths": request.wiki_page_paths}}
-    )
+    print(f"🔗 Calling MCP server at localhost:{mcp_port}")
     
-    if wiki_response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to fetch wiki pages")
+    # Fetch wiki content
+    try:
+        wiki_response = requests.post(
+            f"http://127.0.0.1:{mcp_port}/tools/fetch_wiki/run",
+            json={"args": {"page_paths": request.wiki_page_paths}},
+            timeout=30
+        )
+        
+        if wiki_response.status_code != 200:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to fetch wiki pages: {wiki_response.status_code} - {wiki_response.text}"
+            )
+        
+        wiki_content = wiki_response.json().get("result", "")
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Could not connect to MCP server: {str(e)}"
+        )
     
-    wiki_content = wiki_response.json().get("result", "")
-    
-    if "Error" in wiki_content:
+    if "Error" in wiki_content or not wiki_content:
         raise HTTPException(status_code=404, detail=f"Wiki pages not found: {wiki_content}")
     
     print(f"✅ Fetched wiki content ({len(wiki_content)} chars)")
@@ -213,31 +229,42 @@ Generate stories now:"""
     for idx, story in enumerate(stories, 1):
         print(f"📤 Creating story {idx}/{len(stories)}")
         
-        azure_response = requests.post(
-            f"http://127.0.0.1:{port}/tools/create_story/run",
-            json={
-                "args": {
+        try:
+            azure_response = requests.post(
+                f"http://127.0.0.1:{mcp_port}/tools/create_story/run",
+                json={
+                    "args": {
+                        "title": story["title"],
+                        "description": story["description"],
+                        "epic_id": request.epic_id
+                    }
+                },
+                timeout=30
+            )
+            
+            if azure_response.status_code == 200:
+                result = azure_response.json().get("result", "")
+                created_stories.append({
                     "title": story["title"],
-                    "description": story["description"],
-                    "epic_id": request.epic_id
-                }
-            }
-        )
-        
-        if azure_response.status_code == 200:
-            result = azure_response.json().get("result", "")
-            created_stories.append({
-                "title": story["title"],
-                "status": "created",
-                "result": result
-            })
-            print(f"✅ Story {idx} created")
-        else:
+                    "status": "created",
+                    "result": result
+                })
+                print(f"✅ Story {idx} created")
+            else:
+                created_stories.append({
+                    "title": story["title"],
+                    "status": "failed",
+                    "error": azure_response.text
+                })
+                print(f"❌ Story {idx} failed: {azure_response.text}")
+                
+        except requests.exceptions.RequestException as e:
             created_stories.append({
                 "title": story["title"],
                 "status": "failed",
-                "error": azure_response.text
+                "error": str(e)
             })
+            print(f"❌ Story {idx} connection error: {str(e)}")
     
     return {
         "message": f"Generated {len(stories)} stories",
@@ -277,8 +304,14 @@ def parse_stories(llm_output: str) -> list:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "service": "Story Generator API"
+    }
 
 @app.get("/")
 async def root():
-    return {"status": "running"}
+    return {
+        "status": "running",
+        "service": "Story Generator API"
+    }

@@ -91,12 +91,12 @@ async def fetch_wiki(request: Request):
     for page_path in page_paths:
         wiki_url = f"{AZURE_ORG_URL}/{AZURE_PROJECT}/_apis/wiki/wikis/{AZURE_PROJECT}.wiki/pages?path=/{page_path}&includeContent=true&api-version=7.0"
         
-        print(f"🔍 Fetching wiki page: {page_path}")
+        print(f"📄 Fetching wiki page: {page_path}")
         print(f"🔗 URL: {wiki_url}")
         
         try:
-            res = requests.get(wiki_url, headers=headers)
-            print(f"📄 Wiki response status: {res.status_code}")
+            res = requests.get(wiki_url, headers=headers, timeout=30)
+            print(f"📊 Wiki response status: {res.status_code}")
             
             if res.status_code == 200:
                 result = res.json()
@@ -105,7 +105,7 @@ async def fetch_wiki(request: Request):
                 print(f"✅ Fetched {page_path} ({len(content)} chars)")
             else:
                 print(f"⚠️ Failed to fetch {page_path}: {res.status_code}")
-                combined_content.append(f"=== {page_path} ===\nError: Could not fetch page\n")
+                combined_content.append(f"=== {page_path} ===\nError: Could not fetch page (Status {res.status_code})\n")
                 
         except Exception as e:
             print(f"❌ Error fetching {page_path}: {str(e)}")
@@ -171,7 +171,7 @@ async def create_story(request: Request):
     print(f"🔗 Posting to: {AZURE_WORKITEM_URL}")
 
     try:
-        r = requests.post(AZURE_WORKITEM_URL, json=payload, headers=headers, allow_redirects=False)
+        r = requests.post(AZURE_WORKITEM_URL, json=payload, headers=headers, allow_redirects=False, timeout=30)
         
         print(f"📤 Azure Response Status: {r.status_code}")
         
@@ -201,7 +201,8 @@ async def health():
     return {
         "status": "ok",
         "azure_org": AZURE_ORG_URL,
-        "azure_project": AZURE_PROJECT
+        "azure_project": AZURE_PROJECT,
+        "service": "MCP Server"
     }
 
 @app.get("/")
@@ -213,4 +214,5 @@ async def root():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
+    print(f"🚀 Starting MCP server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
