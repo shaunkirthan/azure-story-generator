@@ -2,84 +2,108 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Story Generator</title>
-
-  <!-- Load SDK from CDN - using latest stable version -->
-  <script src="https://unpkg.com/azure-devops-extension-sdk@3.0.9/dist/azure-devops-extension-sdk.min.js"></script>
-
   <style>
-    * {
-      box-sizing: border-box;
-    }
-    
     body { 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-      margin: 0;
-      padding: 16px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      margin: 16px;
       background: transparent;
     }
-    
-    .container {
-      max-width: 100%;
+    .input-group {
+      margin-bottom: 12px;
     }
-    
+    input {
+      padding: 8px;
+      width: 100%;
+      max-width: 300px;
+      border: 1px solid #ccc;
+      border-radius: 2px;
+      font-size: 14px;
+    }
     button { 
       padding: 10px 20px;
-      background-color: #0078d4;
+      background: #0078d4;
       color: white;
       border: none;
       border-radius: 2px;
       cursor: pointer;
       font-size: 14px;
-      font-weight: 600;
-      transition: background-color 0.2s;
       width: 100%;
       max-width: 300px;
     }
-    
-    button:hover:not(:disabled) {
-      background-color: #005a9e;
-    }
-    
-    button:disabled {
-      background-color: #ccc;
-      cursor: not-allowed;
-      opacity: 0.6;
-    }
-    
-    #status { 
-      margin-top: 12px;
-      color: #323130;
-      font-size: 13px;
-      line-height: 1.5;
-      min-height: 40px;
-    }
-    
-    .loading {
-      color: #0078d4;
-      font-weight: 500;
-    }
-    
-    .success {
-      color: #107c10;
-      font-weight: 500;
-    }
-    
-    .error {
-      color: #d13438;
-      font-weight: 500;
-    }
+    button:hover:not(:disabled) { background: #005a9e; }
+    button:disabled { background: #ccc; opacity: 0.6; }
+    #status { margin-top: 12px; font-size: 13px; }
+    .loading { color: #0078d4; }
+    .success { color: #107c10; }
+    .error { color: #d13438; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <button id="go">🤖 Generate Stories from Wiki</button>
-    <div id="status">Ready to generate stories</div>
+  <div class="input-group">
+    <input type="number" id="epicId" placeholder="Enter Epic ID">
   </div>
+  <button id="go">🤖 Generate Stories</button>
+  <div id="status">Enter Epic ID and click Generate</div>
 
-  <!-- Include your script after the SDK script to ensure SDK is loaded first -->
-  <script src="script.js"></script>
+  <script>
+    var epicInput = document.getElementById('epicId');
+    var btn = document.getElementById('go');
+    var status = document.getElementById('status');
+    var BACKEND = 'https://azure-story-generator.onrender.com';
+    
+    // Try to get Epic ID from URL
+    var url = window.location.href;
+    var match = url.match(/[?&]id=(\d+)/) || url.match(/_workitems\/edit\/(\d+)/);
+    if (match) {
+      epicInput.value = match[1];
+      status.textContent = 'Ready - Epic ID detected';
+      status.className = 'success';
+    }
+    
+    btn.onclick = function() {
+      var epicId = epicInput.value;
+      
+      if (!epicId) {
+        status.textContent = 'Please enter Epic ID';
+        status.className = 'error';
+        return;
+      }
+      
+      btn.disabled = true;
+      status.textContent = 'Processing Epic #' + epicId + '...';
+      status.className = 'loading';
+      
+      fetch(BACKEND + '/generate_from_epic', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({epic_id: parseInt(epicId)})
+      })
+      .then(function(res) { 
+        if (!res.ok) throw new Error('Request failed');
+        return res.json(); 
+      })
+      .then(function(result) {
+        if (result.error) {
+          status.textContent = 'Error: ' + result.error;
+          status.className = 'error';
+        } else {
+          status.textContent = '✅ Created ' + result.story_count + ' stories!';
+          status.className = 'success';
+          
+          // Reload page after 2 seconds to show new stories
+          setTimeout(function() {
+            window.top.location.reload();
+          }, 2000);
+        }
+        btn.disabled = false;
+      })
+      .catch(function(err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'error';
+        btn.disabled = false;
+      });
+    };
+  </script>
 </body>
 </html>
