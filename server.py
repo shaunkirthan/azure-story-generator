@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import os
 import json
+import base64
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,6 +49,148 @@ class FindWikiRequest(BaseModel):
 class GenerateRequest(BaseModel):
     wiki_page_paths: list[str]
     epic_id: int = None
+
+class EpicRequest(BaseModel):
+    epic_id: int
+
+# NEW ENDPOINT - Complete workflow from Epic ID
+@app.post("/generate_from_epic")
+async def generate_from_epic(request: EpicRequest):
+    """
+    Complete workflow: fetch epic title, find wiki pages, generate stories
+    All from just an Epic ID
+    """
+    epic_id = request.epic_id
+    
+    if not epic_id:
+        return {"error": "No epic ID provided"}
+    
+    print(f"🎯 Processing Epic #{epic_id}")
+    
+    # Step 1: Get Epic title from Azure DevOps REST API
+    try:
+        azure_org = os.getenv("AZURE_ORG_URL").rstrip('/')
+        azure_project = os.getenv("AZURE_PROJECT")
+        azure_token = os.getenv("AZURE_TOKEN")
+        
+        auth_string = f":{azure_token}"
+        basic_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+        
+        headers = {
+            "Authorization": f"Basic {basic_auth}",
+            "Content-Type": "application/json"
+        }
+        
+        epic_url = f"{azure_org}/{azure_project}/_apis/wit/workitems/{epic_id}?api-version=7.0"
+        print(f"📡 Fetching Epic from: {epic_url}")
+        
+        epic_res = requests.get(epic_url, headers=headers, timeout=30)
+        
+        if epic_res.status_code != 200:
+            return {"error": f"Failed to fetch Epic: {epic_res.status_code}"}
+        
+        epic_data = epic_res.json()
+        epic_title = epic_data.get("fields", {}).get("System.Title", "")
+        
+        if not epic_title:
+            return {"error": "Epic has no title"}
+        
+        print(f"✅ Epic title: {epic_title}")
+        
+    except Exception as e:
+        print(f"❌ Error fetching Epic: {str(e)}")
+        return {"error": f"Failed to read Epic: {str(e)}"}
+    
+    # Step 2: Find related wiki pages
+    try:
+        all_pages = await get_all_wiki_pages()
+        
+        if not all_pages:
+            return {"error": "No wiki pages found in project", "story_count": 0}
+        
+        # Use AI to match pages if OpenAI key available, otherwise use keyword matching
+        if os.getenv('OPENAI_API_KEY'):
+            prompt = f"""You are analyzing which wiki pages are relevant to an Epic.
+
+Epic Title: "{epic_title}"
+
+Available Wiki Pages:
+{chr(10).join(f"- {page}" for page in all_pages)}
+
+Task: Identify which wiki pages are related to this epic and rate each match from 0.0 to 1.0.
+
+Only include pages with confidence >= 0.6.
+
+Response format (JSON):
+{{
+  "matches": [
+    {{"path": "page-name", "confidence": 0.95, "reason": "why it matches"}}
+  ]
+}}
+
+Response:"""
+
+            try:
+                response_text = call_openai([
+                    {"role": "system", "content": "You are an expert at matching documentation to project epics."},
+                    {"role": "user", "content": prompt}
+                ], temperature=0.3)
+                
+                result = json.loads(response_text)
+                matched_pages = result.get("matches", [])
+                print(f"🤖 AI matched {len(matched_pages)} wiki pages")
+                
+            except Exception as e:
+                print(f"⚠️ AI matching failed, using keyword fallback: {str(e)}")
+                matched_pages = []
+                epic_keywords = epic_title.lower().split()
+                for page in all_pages:
+                    page_lower = page.lower()
+                    score = sum(1 for word in epic_keywords if word in page_lower) / len(epic_keywords)
+                    if score >= 0.3:
+                        matched_pages.append({"path": page, "confidence": score})
+        else:
+            # Keyword matching fallback
+            matched_pages = []
+            epic_keywords = epic_title.lower().split()
+            for page in all_pages:
+                page_lower = page.lower()
+                score = sum(1 for word in epic_keywords if word in page_lower) / len(epic_keywords)
+                if score >= 0.3:
+                    matched_pages.append({"path": page, "confidence": score})
+        
+        if not matched_pages:
+            return {"error": "No related wiki pages found for this Epic", "story_count": 0}
+        
+        print(f"📚 Found {len(matched_pages)} related wiki pages")
+        
+    except Exception as e:
+        print(f"❌ Wiki search failed: {str(e)}")
+        return {"error": f"Wiki search failed: {str(e)}"}
+    
+    # Step 3: Generate stories using existing function
+    try:
+        gen_request = GenerateRequest(
+            wiki_page_paths=[p["path"] for p in matched_pages],
+            epic_id=epic_id
+        )
+        result = await generate_stories(gen_request)
+        
+        story_count = len([s for s in result["stories"] if s["status"] == "created"])
+        
+        print(f"✅ Successfully created {story_count} stories")
+        
+        return {
+            "success": True,
+            "story_count": story_count,
+            "message": f"Created {story_count} user stories",
+            "wiki_pages_used": len(matched_pages)
+        }
+        
+    except Exception as e:
+        print(f"❌ Story generation failed: {str(e)}")
+        return {"error": f"Story generation failed: {str(e)}"}
+
 
 @app.post("/find_wiki_pages")
 async def find_wiki_pages(request: FindWikiRequest):
@@ -111,7 +254,6 @@ async def get_all_wiki_pages():
     azure_project = os.getenv("AZURE_PROJECT")
     azure_token = os.getenv("AZURE_TOKEN")
     
-    import base64
     auth_string = f":{azure_token}"
     basic_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
     
@@ -158,8 +300,7 @@ async def get_all_wiki_pages():
 async def generate_stories(request: GenerateRequest):
     print(f"📖 Generating stories from {len(request.wiki_page_paths)} wiki pages")
     
-    # MCP server runs on port 5001 (hardcoded in mcp_server.py)
-    # Since both servers run on same machine, we use localhost
+    # MCP server runs on port 5001
     mcp_port = int(os.getenv("MCP_PORT", "5001"))
     
     print(f"🔗 Calling MCP server at localhost:{mcp_port}")
@@ -175,7 +316,7 @@ async def generate_stories(request: GenerateRequest):
         if wiki_response.status_code != 200:
             raise HTTPException(
                 status_code=500, 
-                detail=f"Failed to fetch wiki pages: {wiki_response.status_code} - {wiki_response.text}"
+                detail=f"Failed to fetch wiki pages: {wiki_response.status_code}"
             )
         
         wiki_content = wiki_response.json().get("result", "")
@@ -187,7 +328,7 @@ async def generate_stories(request: GenerateRequest):
         )
     
     if "Error" in wiki_content or not wiki_content:
-        raise HTTPException(status_code=404, detail=f"Wiki pages not found: {wiki_content}")
+        raise HTTPException(status_code=404, detail=f"Wiki pages not found")
     
     print(f"✅ Fetched wiki content ({len(wiki_content)} chars)")
     print("🤖 Generating user stories with LLM...")
@@ -256,7 +397,7 @@ Generate stories now:"""
                     "status": "failed",
                     "error": azure_response.text
                 })
-                print(f"❌ Story {idx} failed: {azure_response.text}")
+                print(f"❌ Story {idx} failed")
                 
         except requests.exceptions.RequestException as e:
             created_stories.append({
@@ -264,7 +405,7 @@ Generate stories now:"""
                 "status": "failed",
                 "error": str(e)
             })
-            print(f"❌ Story {idx} connection error: {str(e)}")
+            print(f"❌ Story {idx} error: {str(e)}")
     
     return {
         "message": f"Generated {len(stories)} stories",
