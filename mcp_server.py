@@ -213,6 +213,6 @@ async def root():
     }
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5001))
+    port = int(os.getenv("MCP_PORT", 5001))
     print(f"🚀 Starting MCP server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
