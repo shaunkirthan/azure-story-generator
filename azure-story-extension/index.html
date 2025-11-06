@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Story Generator</title>
+
+  <!-- Load SDK from CDN - using latest stable version -->
+  <script src="https://unpkg.com/azure-devops-extension-sdk@3.0.9/dist/azure-devops-extension-sdk.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+      margin: 0;
+      padding: 16px;
+      background: transparent;
+    }
+    
+    .container {
+      max-width: 100%;
+    }
+    
+    button { 
+      padding: 10px 20px;
+      background-color: #0078d4;
+      color: white;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: background-color 0.2s;
+      width: 100%;
+      max-width: 300px;
+    }
+    
+    button:hover:not(:disabled) {
+      background-color: #005a9e;
+    }
+    
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    
+    #status { 
+      margin-top: 12px;
+      color: #323130;
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 40px;
+    }
+    
+    .loading {
+      color: #0078d4;
+      font-weight: 500;
+    }
+    
+    .success {
+      color: #107c10;
+      font-weight: 500;
+    }
+    
+    .error {
+      color: #d13438;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <button id="go">🤖 Generate Stories from Wiki</button>
+    <div id="status">Ready to generate stories</div>
+  </div>
+
+  <!-- Include your script after the SDK script to ensure SDK is loaded first -->
+  <script src="script.js"></script>
+</body>
+</html>

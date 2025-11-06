@@ -1,0 +1,56 @@
+{
+  "manifestVersion": 1,
+  "id": "story-generator-extension",
+  "publisher": "shaun0076",
+  "version": "1.3.7",
+  "name": "Auto Story Generator",
+  "description": "Generate user stories from Azure Wiki content using AI",
+  "public": false,
+  "categories": ["Azure Boards"],
+  "targets": [
+    {
+      "id": "Microsoft.VisualStudio.Services"
+    }
+  ],
+  "icons": {
+    "default": "images/icon.png"
+  },
+  "contributions": [
+    {
+      "id": "story-generator-group",
+      "type": "ms.vss-work-web.work-item-form-group",
+      "targets": ["ms.vss-work-web.work-item-form"],
+      "properties": {
+        "name": "Story Generator",
+        "uri": "index.html",
+        "height": 240
+      }
+    }
+  ],
+  "files": [
+    {
+      "path": "index.html",
+      "addressable": true,
+      "contentType": "text/html"
+    },
+    {
+      "path": "script.js",
+      "addressable": true,
+      "contentType": "application/javascript"
+    },
+    {
+      "path": "images",
+      "addressable": true
+    }
+  ],
+  "scopes": ["vso.work_write"],
+  "contentSecurityPolicy": {
+    "default-src": "'self'",
+    "script-src": "'self' https://unpkg.com https://azure-story-generator.onrender.com",
+    "connect-src": "'self' https://azure-story-generator.onrender.com https://dev.azure.com https://*.visualstudio.com https://login.microsoftonline.com",
+    "img-src": "'self' data: https://*.vssassets.io https://azure-story-generator.onrender.com",
+    "style-src": "'self' 'unsafe-inline'",
+    "frame-src": "'self' https://dev.azure.com https://*.visualstudio.com",
+    "font-src": "'self' data:"
+  }
+}
